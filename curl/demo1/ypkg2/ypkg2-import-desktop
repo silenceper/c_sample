@@ -1,0 +1,124 @@
+#! /usr/bin/perl
+
+use strict;
+use warnings;
+
+use File::Find;
+
+my ( $language, $name, $dir ) = ( 'zh_CN', '', '/usr/share/app-info/desktop' );
+
+sub usage
+{
+    print "Usage:\n  ypkg2-import-desktop [-llanguage] [-nname] [-ddir]\n\neg:  ypkg2-improt-desktop -lzh_CN -nfirefox -d/usr/share/app-info/desktop\n";
+}
+
+sub import_desktop
+{
+    my $desktop;
+    if( defined( $_[0] ) )
+    {
+        $desktop = $_[0];
+    }
+    else
+    {
+        $desktop = $_;
+    }
+
+    my ( $name, $kw_name, $kw_generic_name, $kw_fullname, $kw_comment, $sql ) = ( '', '', '', '', '', '' );
+
+
+    ($name) = $desktop =~ /(.*)\.desktop/;
+    if( ! defined( $name ) )
+    {
+        return -1;
+    }
+
+    if( ! -e -r $desktop )
+    {
+        print "Permission denied for $desktop!\n";
+        return -1;
+    }
+
+
+    if( ! open DESKTOP, $desktop )
+    {
+            print "Cannot open $desktop!\n";
+            return -1;
+    }
+
+    while( <DESKTOP> )
+    {
+        if( /^Name\[$language\]=(.*)/i )
+        {
+            $kw_name = $1;
+        }
+        elsif( /^GenericName\[$language\]=(.*)/i )
+        {
+            $kw_generic_name = $1;
+        }
+        elsif( /^X-GNOME-FullName\[$language\]=(.*)/i )
+        {
+            $kw_fullname = $1;
+        }
+        elsif( /^Comment\[$language\]=(.*)/i )
+        {
+            $kw_comment = $1;
+        }
+    }
+
+    $sql = "replace into keywords values( '$name', '$language', '$kw_name', '$kw_generic_name', '$kw_fullname', '$kw_comment' )";
+
+    if( $kw_name ne '' )
+    {
+        `sqlite3 /var/ypkg/db/package.db "$sql"`;
+        #print $sql, "\n";
+    }
+
+
+    close DESKTOP;
+}
+
+
+if( @ARGV > 3 )
+{
+    &usage;
+    exit 0;
+}
+
+for( @ARGV )
+{
+    if( /^-l/ )
+    {
+        $language = substr $_, 2;
+    }
+    elsif( /^-n/ )
+    {
+        $name = substr $_, 2;
+    }
+    elsif( /^-d/ )
+    {
+        $dir = substr $_, 2;
+    }
+    elsif( /^-/ )
+    {
+        &usage;
+        exit 0;
+    }
+}
+
+if( $dir eq '' || ! -d -r -x $dir )
+{
+    print "Permission denied for $dir!\n";
+    exit -1;
+}
+
+
+chdir $dir;
+if( $name ne '' )
+{
+    &import_desktop( $name . '.desktop' );
+}
+else
+{
+    find( { wanted => \&import_desktop }, '.' );
+}

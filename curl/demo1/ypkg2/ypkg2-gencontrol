@@ -1,0 +1,304 @@
+#! /usr/bin/perl
+#
+# ypk control.xml generator
+#
+# Copyright (c) 2013 StartOS
+#
+# Written by: 0o0<0o0zzyz@gmail.com>
+# Version: 0.1
+# Date: 2013.1.31
+#
+# Usage:
+#       ypkg2-gencontrol [--desktop] [DIR] ...
+#       ypkg2-gencontrol --help
+#
+
+use strict;
+use warnings;
+
+use File::Find;
+use File::Copy;
+use POSIX qw/uname/;
+use Digest::MD5 qw/md5_hex/;
+use Cwd;
+
+my ( $desktop, $install, $exec, $total_size, $disk_usage, $dir_count, $file_count, $link_count ) = ( 0, '', '', 0, 0, 0, 0, 0 );
+
+sub usage
+{
+    print "Usage:\n  ypkg2-gencontrol [--desktop]  [DIR] ...\n  ypkg2-gencontrol --help\n";
+}
+
+sub xml_content
+{
+'<?xml version="1.0" encoding="UTF-8"?>
+<PackageInfo>
+    <Package name="">
+        <genericname%s>
+            <keyword lang="en"></keyword>
+        </genericname>
+        <category></category>          
+        <arch>%s</arch>                                        
+        <version></version>                            
+        <priority></priority>                    
+        <license></license>
+        <packager></packager>
+        <homepage></homepage>
+        <repo></repo>
+        <install>%s</install>
+        <exec>%s</exec>
+        <build_date></build_date>    
+        <uri></uri>
+        <description%s>
+            <keyword lang="en"></keyword>
+        </description>
+        <data_count>1</data_count>
+        <data id="0">                                                    
+            <name>pkgdata</name>                          
+            <format>xz</format>
+            <size></size>
+            <install_size>%d</install_size>        
+            <depend></depend>              
+            <bdepend></bdepend>
+            <recommended></recommended>      
+            <replace></replace>      
+            <conflict></conflict>      
+        </data>                              
+    </Package>
+</PackageInfo>';
+}
+
+sub get_info
+{
+    if( $_ eq '.' )
+    {
+        return;
+    } 
+
+    if( $File::Find::name =~ m[^\./YLMFOS] )
+    {
+        if( /.*\.desktop/ )
+        {
+            $desktop = 1;
+
+            if( open DESKTOP, $_ )
+            {
+                while( <DESKTOP> )
+                {
+                    if( /^Exec=(.*)/i )
+                    {
+                        $exec = $1;
+                        last;
+                    }
+                    elsif( /^TryExec=(.*)/i )
+                    {
+                        $exec = $1;
+                        last;
+                    }
+                }
+                close DESKTOP;
+            }
+
+        }
+        elsif( /.*\.install/ )
+        {
+            $install = $_;
+        }
+        return;
+    }
+
+    if( $File::Find::name =~ m[^\./var/ypkg] )
+    {
+        return;
+    }
+
+    my ( $type, $extra );
+
+    my ( $dev, $ino, $mode, $nlink, $uid, $gid, $rdev, $size, $atime, $mtime, $ctime, $blksize, $blocks ) = lstat;
+
+    if( -d $_ )
+    {
+        $type = 'D';
+        $extra = '';
+        $dir_count++;
+    }
+    elsif( -l $_ )
+    {
+        $type = 'S';
+        $extra = readlink;
+        $link_count++;
+    }
+    else
+    {
+        $type = 'F';
+        open FILE, $_ or die "Cannot open '$_':$!";
+        binmode FILE;
+        $extra = Digest::MD5->new->addfile( *FILE )->hexdigest;
+        close FILE;
+        $file_count++;
+        $total_size += $size;
+    }
+
+    $disk_usage += $blocks;
+
+    printf FILELIST "%s,%s,%d,%04o,%d,%d,%d,%s\n", $type, substr( $File::Find::name, 1 ), $size, $mode & 0777, $uid, $gid, $mtime, $extra ;
+}
+
+sub generate_control
+{
+    if( ! -d -r -w -x $_[0] )
+    {
+        print "Permission denied for $_[0]!\n";
+        return -1;
+    }
+
+    my $pwd = getcwd;
+
+    chdir $_[0];
+
+    if( ! -e 'YLMFOS' )
+    {
+        mkdir 'YLMFOS', 0755 or return -1;;
+    }
+    else
+    {
+        if( ! -d -r -w -x 'YLMFOS' )
+        {
+            print "Permission denied for YLMFOS!\n";
+            return -1;
+        }
+    }
+
+    #create filelist
+    if( ! open FILELIST, '>YLMFOS/filelist' )
+    {
+            print "Cannot create YLMFOS/filelist!\n";
+            return -1;
+    }
+
+    find( { wanted => \&get_info }, '.' );
+
+    printf FILELIST "I,%d,%d,%d,%ld,%d\n", $file_count, $dir_count, $link_count, $disk_usage / 2, ($total_size - 1) / 1024 + 1;
+
+    close FILELIST;
+
+
+    #create control.xml
+    my @uname = uname;
+    if( ! -e 'YLMFOS/control.xml' )
+    {
+        if( ! open CONTROL, '>YLMFOS/control.xml' )
+        {
+                print "Cannot create YLMFOS/control.xml!\n";
+                return -1;
+        }
+
+        my $desktop_str = $desktop == 1 ? ' type="desktop"' : '';
+
+        printf CONTROL &xml_content, $desktop_str, $uname[4], $install, $exec, $desktop_str, $total_size;
+
+        close CONTROL;
+    }
+    else
+    {
+        copy( 'YLMFOS/control.xml', 'YLMFOS/control.xml.bak' );
+
+        if( ! open CONTROLBAK, 'YLMFOS/control.xml.bak' )
+        {
+                print "Cannot open YLMFOS/control.xml.bak!\n";
+                return -1;
+        }
+
+        if( ! open CONTROL, '>YLMFOS/control.xml' )
+        {
+                print "Cannot create YLMFOS/control.xml!\n";
+                return -1;
+        }
+
+        while( <CONTROLBAK> )
+        {
+            if( /<install_size>/ )
+            {
+                $_ = "        <install_size>$total_size</install_size>\n";
+            }
+            elsif( /<exec>/ )
+            {
+                $_ = "        <exec>$exec</exec>\n";
+            }
+            elsif( /<genericname/ )
+            {
+                if( $desktop )
+                {
+                    $_ = "        <genericname type=\"desktop\">\n";
+                }
+                else
+                {
+                    $_ = "        <genericname>\n";
+
+                }
+            }
+            elsif( /<arch>/ )
+            {
+                $_ = "        <arch>" . $uname[4] . "</arch>\n";
+            }
+            elsif( /<install>/ )
+            {
+                $_ = "        <install>$install</install>\n";
+            }
+            elsif( /<description/ )
+            {
+                if( $desktop )
+                {
+                    $_ = "        <description type=\"desktop\">\n";
+                }
+                else
+                {
+                    $_ = "        <description>\n";
+
+                }
+            }
+
+            print CONTROL;
+        }
+
+        close CONTROL;
+        close CONTROLBAK;
+        unlink 'YLMFOS/control.xml.bak';
+    }
+
+    chdir $pwd;
+    0;
+}
+
+if( @ARGV == 0 )
+{
+    exit &generate_control( '.' );
+}
+
+for( @ARGV )
+{
+    if( $_ eq "--desktop" )
+    {
+        $desktop = 1;
+        last;
+    }
+    elsif( $_ eq "--help" )
+    {
+        &usage;
+        exit 0;
+    }
+    elsif( /^-/ )
+    {
+        &usage;
+        exit 0;
+    }
+}
+
+for( @ARGV )
+{
+    if( /^-/ )
+    {
+        next;
+    }
+    &generate_control( $_ );
+}
