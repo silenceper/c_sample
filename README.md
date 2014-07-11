@@ -1,4 +1,4 @@
 c_sample
 ========
-*###curl
+###curl
     使用libcurl
